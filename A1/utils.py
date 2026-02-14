@@ -2,6 +2,161 @@ import cv2
 import numpy as np
 import math
 
+"""
+    Direction Reference:
+
+                1
+                |
+                |
+         0 <- - | - -> 2
+                |
+                |
+                3
+    """
+
+
+def convert_to_grayscale(img):
+    return (0.114 * img[:,:,0] + 0.587 * img[:,:,1] + 0.299 * img[:,:,2]).astype(np.uint8)
+
+def apply_threshold(gray_img, threshold_val):
+    return (gray_img > threshold_val).astype(np.uint8) * 255
+
+def convert_binary(gray_img, threshold_val):
+    return (gray_img > threshold_val).astype(int)
+
+def rotate(pixel, dir):
+    x, y = pixel
+    end = None
+    if(dir == 0):
+        r = x-1
+        c = y
+        new_dir = 1
+    elif(dir == 1):
+        r = x
+        c = y+1
+        new_dir = 2
+    elif(dir == 2):
+        r = x+1
+        c = y
+        new_dir = 3
+        end = [x, y+1]
+    else:
+        r = x
+        c = y-1
+        new_dir = 0
+    
+    return r, c, new_dir, end
+
+
+
+def find_border(img, start_pixel, prev_pixel, dir, NBD):
+    cur_pixel = list(start_pixel)
+    next_pixel = list(prev_pixel)
+    end_pixel = None
+    track_pixel = list(prev_pixel)
+    contour = []
+    contour.append(list(cur_pixel))
+
+    #Detect isolated point
+
+    while(img[next_pixel[0]][next_pixel[1]] == 0):
+        next_pixel[0], next_pixel[1], dir, end = rotate(cur_pixel, dir)
+
+        if(end != None):
+            end_pixel = list(end)
+        if(track_pixel == next_pixel):          #Isolated Point
+            img[cur_pixel[0]][cur_pixel[1]] = -NBD
+            return contour
+
+    if(end_pixel != None and img[end_pixel[0]][end_pixel[1]] == 0):   #isolated point
+        img[cur_pixel[0]][cur_pixel[1]] = -NBD
+        return contour
+    elif((end_pixel == None or (end_pixel != None and img[end_pixel[0]][end_pixel[1]] != 0)) and img[cur_pixel[0]][cur_pixel[1]] == 1):
+        img[cur_pixel[0]][cur_pixel[1]] = NBD
+    else: pass
+
+    prev_pixel = list(cur_pixel)
+    cur_pixel = list(next_pixel)
+    contour.append(list(cur_pixel))
+    first_found_pixel = list(cur_pixel)         # To check when the loop completes
+    flag = 0                                    
+
+    if(dir >= 2): dir -= 2  #reverse the direcion as we start rotation from the prev pixel
+    else : dir += 2
+
+    while True : 
+        if(cur_pixel == first_found_pixel and prev_pixel == start_pixel and flag == 1):
+            break
+        else:
+            flag = 1
+            next_pixel[0], next_pixel[1], dir, end = rotate(cur_pixel, dir)
+
+            if(end != None):
+                end_pixel = list(end)
+            
+            while(img[next_pixel[0]][next_pixel[1]] == 0):
+                next_pixel[0], next_pixel[1], dir, end = rotate(cur_pixel, dir)
+                if(end != None):
+                    end_pixel = list(end)
+            
+            if(end_pixel != None and img[end_pixel[0]][end_pixel[1]] == 0):
+                img[cur_pixel[0]][cur_pixel[1]] = -NBD
+                end_pixel = None
+            elif((end_pixel == None or (end_pixel != None and img[end_pixel[0]][end_pixel[1]] != 0)) and img[cur_pixel[0]][cur_pixel[1]] == 1):
+                img[cur_pixel[0]][cur_pixel[1]] = NBD
+                end_pixel = None
+            else : pass
+            prev_pixel = list(cur_pixel)
+            cur_pixel = list(next_pixel)
+            contour.append(list(cur_pixel))
+
+            if(dir >= 2): dir -= 2  #reverse the direcion as we start rotation from the prev pixel
+            else : dir += 2
+
+    return contour
+
+
+
+
+def detect_contours(img):
+    rows, cols = img.shape
+    print(rows, cols)
+    LNBD = 1
+    NBD = 1
+    border_points = []
+    parent_border = []
+    parent_border.append(-1)
+    border_type = []
+    border_type.append(0)
+
+    for i in range(1,rows-1):
+        LNBD=1
+        for j in range(1,cols-1):
+            if img[i][j]==1 and img[i][j-1]==0:
+                NBD+=1
+                direction=0
+                parent_border.append(LNBD) 
+                contour= find_border(img,[i,j],[i,j-1],direction,NBD)
+                border_points.append(contour)
+                border_type.append(1)
+                if border_type[NBD-2]==1: parent_border.append(parent_border[NBD-2])
+                else:
+                    if img[i][j]!=1: LNBD=abs(img[i][j])              
+            elif img[i][j]>=1 and img[i][j+1]==0:
+                NBD+=1
+                direction=0
+                if img[i][j]>1: LNBD=img[i][j]
+                parent_border.append(LNBD)
+                contour = find_border(img,[i,j],[i,j+1],direction,NBD)
+                border_points.append(contour)
+                border_type.append(0)
+                if border_type[NBD-2]==0: parent_border.append(parent_border[NBD-2])
+                else:
+                    if img[i][j]!=1: LNBD=abs(img[i][j])
+
+
+
+
 def generate_tag(cell_size=50, tag_id=0):
     """
     Generate an AR tag image with the specified ID.
