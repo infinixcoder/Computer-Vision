@@ -59,15 +59,13 @@ def capture_calibration_images():
         ret_chess, corners = cv2.findChessboardCorners(gray, CHESSBOARD_SIZE, None)
         
         # Draw corners if found
-        if ret_chess:
+        #if ret_chess:
             # Draw and display the corners
-            cv2.drawChessboardCorners(frame, CHESSBOARD_SIZE, corners, ret_chess)
-            cv2.putText(frame, "Chessboard detected!", (50, 50), 
-                        cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+            #cv2.drawChessboardCorners(frame, CHESSBOARD_SIZE, corners, ret_chess)
+            #cv2.putText(frame, "Chessboard detected!", (50, 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
         
         # Display capture counter
-        cv2.putText(frame, f"Captured: {img_counter}", (50, height - 50), 
-                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
+        #cv2.putText(frame, f"Captured: {img_counter}", (50, height - 50), cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
         
         # Display the frame
         cv2.imshow('Camera Calibration', frame)

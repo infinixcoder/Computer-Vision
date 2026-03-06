@@ -7,7 +7,7 @@ import pickle
 # Camera calibration parameters
 # You can modify these variables as needed
 CHESSBOARD_SIZE = (9, 6)  # Number of inner corners per chessboard row and column
-SQUARE_SIZE = 2.5         # Size of a square in centimeters
+SQUARE_SIZE = 1.5         # Size of a square in centimeters
 CALIBRATION_IMAGES_PATH = 'calibration_images/*.jpg'  # Path to calibration images
 OUTPUT_DIRECTORY = 'output'  # Directory to save calibration results
 SAVE_UNDISTORTED = True   # Whether to save undistorted images

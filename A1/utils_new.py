@@ -14,6 +14,8 @@ import math
                 3
     """
 
+def bin_to_img(img):
+    return (img).astype(np.uint8)*255
 
 def convert_to_grayscale(img):
     return (0.114 * img[:,:,0] + 0.587 * img[:,:,1] + 0.299 * img[:,:,2]).astype(np.uint8)
@@ -21,26 +23,81 @@ def convert_to_grayscale(img):
 def apply_threshold(gray_img, threshold_val):
     return (gray_img > threshold_val).astype(np.uint8) * 255
 
+
+def erosion(binary_img):
+    """
+    Vectorized 3x3 erosion: Replaces nested loops with image shifts.
+    Expands black (0) and erodes white (255).
+    """
+    eroded = np.copy(binary_img)
+
+    # Shift the image in 8 directions (3x3 neighborhood)
+    # np.roll moves the pixels; we then take the minimum 
+    
+    eroded = np.minimum(eroded, np.roll(binary_img,  1, axis=0)) # Down
+    eroded = np.minimum(eroded, np.roll(binary_img, -1, axis=0)) # Up
+    eroded = np.minimum(eroded, np.roll(binary_img,  1, axis=1)) # Right
+    eroded = np.minimum(eroded, np.roll(binary_img, -1, axis=1)) # Left
+
+    # Diagonal shifts
+    eroded = np.minimum(eroded, np.roll(np.roll(binary_img,  1, axis=0),  1, axis=1))
+    eroded = np.minimum(eroded, np.roll(np.roll(binary_img,  1, axis=0), -1, axis=1))
+    eroded = np.minimum(eroded, np.roll(np.roll(binary_img, -1, axis=0),  1, axis=1))
+    eroded = np.minimum(eroded, np.roll(np.roll(binary_img, -1, axis=0), -1, axis=1))
+
+    return eroded
+
+def kittler_threshold(gray_img):
+
+    # 1. Calculate Histogram
+    hist, bin_edges = np.histogram(gray_img, bins=256, range=(0, 255))
+    hist = hist.astype(float) + 1e-6 # Add epsilon to avoid division by zero
+    probs = hist / np.sum(hist)
+    
+    # Pre-calculate cumulative sums and means
+    c_sum = np.cumsum(probs)
+    c_mean = np.cumsum(probs * np.arange(256))
+    
+    # Total mean
+    total_mean = c_mean[-1]
+    
+    # Initialize best T and min error
+    best_T = 0
+    min_error = float('inf')
+    
+    # Iterate through all possible thresholds
+    for t in range(1, 255):
+        # Weights (probabilities)
+        p1 = c_sum[t]
+        p2 = 1.0 - p1
+        
+        if p1 == 0 or p2 == 0: continue
+        
+        # Means
+        mu1 = c_mean[t] / p1
+        mu2 = (total_mean - c_mean[t]) / p2
+        
+        # Variances
+        var1 = np.sum(probs[:t+1] * (np.arange(t+1) - mu1)**2) / p1
+        var2 = np.sum(probs[t+1:] * (np.arange(t+1, 256) - mu2)**2) / p2
+        
+        # Handle zero variance to avoid log(0)
+        var1 = max(var1, 1e-6)
+        var2 = max(var2, 1e-6)
+        
+        # Kittler's Criterion Function J(T)
+        # J(T) = 1 + 2 * [P1*log(sigma1) + P2*log(sigma2)] - 2 * [P1*log(P1) + P2*log(P2)]
+        error = 1.0 + 2.0 * (p1 * np.log(np.sqrt(var1)) + p2 * np.log(np.sqrt(var2))) \
+                - 2.0 * (p1 * np.log(p1) + p2 * np.log(p2))
+        
+        if error < min_error:
+            min_error = error
+            best_T = t
+            
+    return best_T
+
 def convert_binary(gray_img, threshold_val):
     return (gray_img > threshold_val).astype(int)
-
-def manual_morph(img, operation='dilate'):
-    # Pad to handle edges
-    padded = np.pad(img, 1, mode='constant', constant_values=0)
-    result = np.zeros_like(img)
-    
-    for i in range(1, padded.shape[0]-1):
-        for j in range(1, padded.shape[1]-1):
-            neighborhood = padded[i-1:i+2, j-1:j+2]
-            if operation == 'dilate':
-                # If ANY pixel in 3x3 is 1, result is 1
-                if np.any(neighborhood == 1):
-                    result[i-1, j-1] = 1
-            elif operation == 'erode':
-                # If ALL pixels in 3x3 are 1, result is 1
-                if np.all(neighborhood == 1):
-                    result[i-1, j-1] = 1
-    return result
 
 def merge_broken_corners(contour_points, dist_threshold=2):
     """
@@ -70,6 +127,67 @@ def merge_broken_corners(contour_points, dist_threshold=2):
 
 
 #----------------------------------------------------------------------------------------------------------------
+
+def sort_corners(corners):
+    """
+    Sorts 4 unique corners in a consistent clockwise order:
+    [Top-Left, Top-Right, Bottom-Right, Bottom-Left]
+    """
+   
+    pts = corners.reshape(4, 2)
+    rect = np.zeros((4, 2), dtype="float32")
+
+    s = pts.sum(axis=1)
+    diff = np.diff(pts, axis=1)
+    rect[0] = pts[np.argmin(s)]
+    rect[2] = pts[np.argmax(s)]
+    rect[1] = pts[np.argmin(diff)]
+    rect[3] = pts[np.argmax(diff)]
+
+    return rect
+
+def tag_not_paper(image, corners, sample_dist=3):
+    
+    center = np.mean(corners, axis=0)
+    
+    # 2. Sample points slightly 'inward' from each corner toward the center
+    sample_points = []
+    for corner in corners:
+        vec = center - corner
+        unit_vec = vec / np.linalg.norm(vec)
+        p = (corner + unit_vec * sample_dist).astype(int)
+        sample_points.append(image[p[1], p[0]]) 
+        
+    avg_intensity = np.mean(sample_points)
+    return avg_intensity < 100
+
+def is_contour_convex(contour):
+
+    pts = contour.reshape(-1, 2)
+    n = len(pts)
+    if n < 3:
+        return False
+
+    signs = []
+    for i in range(n):
+        p1 = pts[i]
+        p2 = pts[(i + 1) % n]
+        p3 = pts[(i + 2) % n]
+        
+        u = p2 - p1
+        v = p3 - p2
+
+        # 2D Cross Product: (ux * vy) - (uy * vx)
+        cp = u[0] * v[1] - u[1] * v[0]
+        
+        if cp != 0:
+            signs.append(np.sign(cp))
+            
+    # If all non-zero cross products have the same sign, it is convex
+    if not signs:
+        return True # Collinear points
+        
+    return all(s == signs[0] for s in signs)
 
 def rotate(pixel, dir):
     x, y = pixel
@@ -305,30 +423,24 @@ def douglas_peucker(points, epsilon):
         return np.array([start_pt, end_pt])
 
 
-def get_contour_depth(index, parent_array):
-    """Recursively calculates how many parents a contour has."""
-    depth = 0
-    current = index+1
-    # -1 usually indicates the frame or no parent
-    while parent_array[current] != -1:
-        depth += 1
-        current = parent_array[current] - 1
-    return depth
 
-
-def extract_tag_candidates(contours, parent_array, epsilon_factor=0.02):
+def extract_tag_candidates(img, contours, parent_array, epsilon_factor=0.02):
     candidates = []
     
     for i in range(len(contours)):
-        if get_contour_depth(i, parent_array) == 3:
-            c = merge_broken_corners(contours[i])
-            perimeter = calculate_perimeter(c)
-            epsilon = epsilon_factor * perimeter
-            approx = douglas_peucker(c, epsilon)
-            approx = approx[:-1]
-            #print(approx)
-            # Step 3: Verify it has exactly 4 corners
-            if len(approx) == 4:
+        
+        c = merge_broken_corners(contours[i])
+        perimeter = calculate_perimeter(c)
+        epsilon = epsilon_factor * perimeter
+        approx = douglas_peucker(c, epsilon)
+        approx = approx[:-1]
+        
+        # Step 3: Verify it has exactly 4 corners
+        if len(approx) == 4:
+            approx = approx[:, ::-1]
+            approx = sort_corners(approx)
+            
+            if(tag_not_paper(img, approx) and is_contour_convex(approx)):   
                 candidates.append(approx)
                 
     return candidates
@@ -336,39 +448,23 @@ def extract_tag_candidates(contours, parent_array, epsilon_factor=0.02):
 
 #----------------------------------------------------------------------------------------------------------------
 
-def sort_corners(corners):
-    """
-    Sorts 4 unique corners in a consistent clockwise order:
-    [Top-Left, Top-Right, Bottom-Right, Bottom-Left]
-    """
-   
-    pts = corners.reshape(4, 2)
+def get_continuous_orientation(src_corners, discrete_rot_index):
 
-    # Initialize sorted array
-    rect = np.zeros((4, 2), dtype="float32")
-
-    # 2. Top-Left has the smallest sum (x + y)
-    # 3. Bottom-Right has the largest sum (x + y)
-    s = pts.sum(axis=1)
-    rect[0] = pts[np.argmin(s)]
-    rect[2] = pts[np.argmax(s)]
-
-
-    # 4. Top-Right has the smallest difference (y - x)
-    # 5. Bottom-Left has the largest difference (y - x)
-    # np.diff calculates [y - x]
-    diff = np.diff(pts, axis=1)
-    rect[1] = pts[np.argmin(diff)]
-    rect[3] = pts[np.argmax(diff)]
-
-    return rect
+    oriented_corners = np.roll(src_corners, -discrete_rot_index, axis=0)
+    
+    p1 = oriented_corners[0] # Top-Left
+    p2 = oriented_corners[1] # Top-Right
+    
+    vector = p2 - p1
+    
+    angle_rad = np.arctan2(vector[1], vector[0])
+    angle_deg = np.degrees(angle_rad)
+    
+    return angle_deg
 
 
 def calculate_homography(src_pts, dst_pts):
-    """
-    Computes Homography matrix H such that H * src = dst
-    src_pts/dst_pts: 4x2 numpy arrays
-    """
+
     A = []
     for i in range(4):
         x, y = src_pts[i][0], src_pts[i][1]
@@ -386,11 +482,8 @@ def calculate_homography(src_pts, dst_pts):
     return H / H[2, 2]
 
 
-def warp_tag(img, src_corners, output_size=64):
-    """
-    Warps the tag area into a square output image.
-    output_size should be a multiple of 8 (e.g., 160 means 20px per cell).
-    """
+def warp_tag(img, src_corners, output_size=160):
+
     # 1. Define destination corners for a square
     dst_corners = np.array([
         [0, 0],
@@ -398,14 +491,11 @@ def warp_tag(img, src_corners, output_size=64):
         [output_size - 1, output_size - 1],
         [0, output_size - 1]
     ])
-    
-    # 2. Compute H mapping frame -> square (or inverse)
-    # We calculate H from Square -> Frame to use for pixel pulling
+
     H = calculate_homography(dst_corners, src_corners)
     
     warped_img = np.zeros((output_size, output_size), dtype=np.uint8)
 
-    # 3. Manual Warp (Pixel Pulling)
     for y in range(output_size):
         for x in range(output_size):
             # Transform destination coordinates back to source
@@ -417,7 +507,7 @@ def warp_tag(img, src_corners, output_size=64):
             if 0 <= src_x < img.shape[1] and 0 <= src_y < img.shape[0]:
                 warped_img[y, x] = img[src_y, src_x]
                 
-    return warped_img
+    return warped_img, H
 
 
 def identify_tag(warped_img):
@@ -427,12 +517,11 @@ def identify_tag(warped_img):
     
     for i in range(8):
         for j in range(8):
-            # Sample the center of the cell to avoid edge noise
             cell = warped_img[i*cell_size : (i+1)*cell_size, j*cell_size : (j+1)*cell_size]
             center_val = np.mean(cell[cell_size//4 : 3*cell_size//4, cell_size//4 : 3*cell_size//4])
             grid[i, j] = 1 if center_val > 150 else 0 # 1 for White, 0 for Black
 
-    # The internal 4x4 grid is at indices [2:6, 2:6]
+    
     inner_grid = grid[2:6, 2:6]
     
     # Find Orientation Marker (White cell at bottom-right of 4x4)
@@ -448,24 +537,19 @@ def identify_tag(warped_img):
     # Rotate the inner grid to normalize orientation
     oriented_inner = np.rot90(inner_grid, k=rotations)
     
-    # Decode ID from central 2x2 (indices 1,2 of the 4x4)
-    # Pattern: Clockwise [cite: 43]
-    # (1,1) -> (1,2) -> (2,2) -> (2,1)
     b1 = oriented_inner[1, 1]
     b2 = oriented_inner[1, 2]
     b3 = oriented_inner[2, 2]
     b4 = oriented_inner[2, 1]
     
-    tag_id = (b1 << 3) | (b2 << 2) | (b3 << 1) | b4
+    tag_id = b1 | (b2 << 1) | (b3 << 2) | (b4 << 3)
     return tag_id, rotations
 
 
 #----------------------------------------------------------------------------------------------------------------
 
 def overlay_2d(frame, template, tag_corners, orientation_rotations):
-    """
-    Superimposes a template image onto the detected AR tag.
-    """
+    
     h_temp, w_temp = template.shape[:2]
     
     # 1. Define Template Corners (Clockwise: TL, TR, BR, BL)
@@ -478,12 +562,9 @@ def overlay_2d(frame, template, tag_corners, orientation_rotations):
     ], dtype="float32")
 
     # 2. Align Tag Corners based on orientation from Task 1
-    # orientation_rotations is 0, 1, 2, or 3 (k * 90 degrees)
-    # We roll the array so the Template's TL matches the Tag's actual TL
     target_pts = np.roll(tag_corners, -orientation_rotations, axis=0)
 
     # 3. Calculate H mapping Template -> Frame
-    # Use your manual DLT function from Task 1
     H = calculate_homography(template_pts, target_pts)
     H_inv = np.linalg.inv(H)
 
@@ -512,6 +593,41 @@ def overlay_2d(frame, template, tag_corners, orientation_rotations):
                 frame[y, x] = template[int(v), int(u)]
 
     return frame
+
+#----------------------------------------------------------------------------------------------------------------
+
+def decompose_homography(H, K):
+    """
+    Decomposes the Homography matrix into Rotation and Translation.
+    """
+    # 1. Compute K_inv * H
+    K_inv = np.linalg.inv(K)
+    H_inv = np.linalg.inv(H)
+    h_prime = np.dot(K_inv, H)
+    
+    # 2. Extract columns
+    h1 = h_prime[:, 0]
+    h2 = h_prime[:, 1]
+    h3 = h_prime[:, 2]
+    
+    # 3. Calculate scaling factor lambda
+    # (The average of the norms of the first two columns is more stable)
+    lam = 1 / ((np.linalg.norm(h1) + np.linalg.norm(h2)) / 2)
+    
+    # 4. Extract rotation columns and translation
+    r1 = lam * h1
+    r2 = lam * h2
+    t = lam * h3
+    
+    # 5. Compute r3 via cross product
+    r3 = np.cross(r1, r2)
+    
+    # 6. Reconstruct Rotation Matrix and ensure it's orthonormal via SVD
+    R_raw = np.stack((r1, r2, r3), axis=1)
+    U, S, Vt = np.linalg.svd(R_raw)
+    R = np.dot(U, Vt)
+    
+    return R, t
 
 #----------------------------------------------------------------------------------------------------------------
 def generate_tag(cell_size=50, tag_id=0):
@@ -603,6 +719,25 @@ def hex_to_rgb(hex_color):
     h_len = len(hex_color)
     return tuple(int(hex_color[i:i + h_len // 3], 16) for i in range(0, h_len, h_len // 3))
 
+def get_face_depth(face, vertices, projection):
+    # Get the Z-value of the face after projection to the camera space
+    face_vertices = [vertices[i - 1] for i in face[0]]
+    avg_z = np.mean([np.dot(projection, [v[0], v[1], v[2], 1])[2] for v in face_vertices])
+    return avg_z
+
+def get_object_extents(obj):
+    # Convert vertices to a numpy array
+    verts = np.array(obj.vertices)
+    # Find the min and max coordinates across all vertices
+    min_coords = np.min(verts, axis=0)
+    max_coords = np.max(verts, axis=0)
+    # Calculate the size in each dimension (X, Y, Z)
+    # Most models use X and Y for the base width/length
+    obj_width = max_coords[0] - min_coords[0]
+    obj_length = max_coords[1] - min_coords[1]
+    
+    return max(obj_width, obj_length)
+
 def render(img, obj, projection, model, color=False):
     """
     Render a loaded obj model into the current video frame.
@@ -614,20 +749,47 @@ def render(img, obj, projection, model, color=False):
         model: The reference image representing the surface to be augmented.
         color: Whether to render in color. Defaults to False.
     """
-    DEFAULT_COLOR = (0, 0, 0)
+    DEFAULT_COLOR = (0, 255, 0)
     vertices = obj.vertices
-    scale_matrix = np.eye(3) * 3
+    obj_size = get_object_extents(obj)
+    h, w = model.shape[:2]
+    # We want the object to take up 80% of the tag width 'w'
+    target_pixel_size = w * 0.9
+    # The multiplier needed to scale the object to that size
+    dynamic_scale = target_pixel_size / obj_size
+    
+    scale_matrix = np.eye(3) * dynamic_scale
     h, w = model.shape
+    light_dir = np.array([1, 1, 1])
 
-    for face in obj.faces:
+    sorted_faces = sorted(obj.faces, key=lambda f: get_face_depth(f, vertices, projection), reverse=True)
+
+    for face in sorted_faces:
+
         face_vertices = face[0]
+        normal_indices = face[1]
         points = np.array([vertices[vertex - 1] for vertex in face_vertices])
-        points = np.dot(points, scale_matrix)
+        rotated_points = np.array([[p[0], -p[2], -p[1]] for p in points])
+        points = np.dot(rotated_points, scale_matrix)
         points = np.array([[p[0] + w / 2, p[1] + h / 2, p[2]] for p in points])
         dst = cv2.perspectiveTransform(points.reshape(-1, 1, 3), projection)
         imgpts = np.int32(dst)
+
+        v1 = points[1] - points[0]
+        v2 = points[2] - points[0]
+        face_normal = np.cross(v1, v2)
+        norm_val = np.linalg.norm(face_normal)
+
         if color is False:
-            cv2.fillConvexPoly(img, imgpts, DEFAULT_COLOR)
+            if norm_val > 0:
+                face_normal /= norm_val
+            # Dot product with light coming from the camera [0, 0, 1]
+                brightness = max(0.1, np.dot(face_normal, light_dir))
+            else:
+                brightness = 0.1
+            
+            shaded_color = tuple([int(c * brightness) for c in DEFAULT_COLOR])
+            cv2.fillConvexPoly(img, imgpts, shaded_color)
         else:
             color = hex_to_rgb(face[-1])
             color = color[::-1]
