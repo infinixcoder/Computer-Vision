@@ -1,0 +1,16 @@
+# Deep Learning Core
+torch
+torchvision
+
+# Vision Transformers
+timm
+
+# Data Manipulation & Metrics
+numpy
+pandas
+scikit-learn
+
+# Image Processing & Visualization
+opencv-python
+matplotlib
+grad-cam
