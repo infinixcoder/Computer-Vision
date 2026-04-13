@@ -3,6 +3,7 @@ import copy
 import torch
 import torch.nn as nn
 import torch.optim as optim
+import torch.optim.lr_scheduler as lr_scheduler
 import numpy as np
 import argparse
 from torch.utils.data import DataLoader
@@ -28,6 +29,16 @@ def main(args):
         criterion = nn.CrossEntropyLoss()
     elif args.loss == "focal":
         criterion = FocalLoss(alpha=args.alpha, gamma=args.gamma)
+
+    # Scheduler Setup
+    if args.scheduler == "step":
+        # Decays the learning rate by gamma every step_size epochs
+        scheduler = lr_scheduler.StepLR(optimizer, step_size=3, gamma=0.1)
+    elif args.scheduler == "cosine":
+        # Anneals the learning rate using a cosine schedule
+        scheduler = lr_scheduler.CosineAnnealingLR(optimizer, T_max=args.epochs)
+    else:
+        scheduler = None
 
     # Training Loop
     best_val_auc = 0.0
@@ -57,6 +68,13 @@ def main(args):
             best_model_wts = copy.deepcopy(model.state_dict())
             print("--> Validation AUC improved! Saving weights.")
 
+        # Step the scheduler at the end of the epoch if one is being used
+        if scheduler is not None:
+            scheduler.step()
+            # Optional: Print current learning rate
+            # current_lr = optimizer.param_groups[0]['lr']
+            # print(f"Learning Rate adjusted to: {current_lr:.6f}")
+
     # Save weights
     os.makedirs(os.path.dirname(args.save_path), exist_ok=True)
     numpy_weights = {k: v.cpu().numpy() for k, v in best_model_wts.items()}
@@ -76,5 +94,6 @@ if __name__ == "__main__":
     parser.add_argument("--lr", type=float, default=1e-4)
     parser.add_argument("--alpha", type=float, default=1.0)
     parser.add_argument("--gamma", type=float, default=2.0)
+    parser.add_argument("--scheduler", type=str, choices=["none", "step", "cosine"], default="none")
     args = parser.parse_args()
     main(args)
